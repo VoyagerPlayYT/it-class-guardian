@@ -1,20 +1,28 @@
 """
 IT-Class Guardian // Teacher Server & Management Hub
-Сервер управления компьютерным классом и рабочими местами учеников (Порт 8023)
-Включает Veyon-подобный мониторинг экранов и трансляцию экрана учителя на весь класс.
+Сервер управления компьютерным классом и рабочими станциями учеников (Порт 8023).
+Включает:
+- Монитор-стену экранов (Veyon-style) в реальном времени.
+- Полноэкранную трансляцию экрана учителя на весь класс.
+- Ручное и автоматическое подключение ПК учеников по сети (LAN Scan & Auto-Discovery).
+- Защиту от переполнения диска C: и откат к эталону после уроков.
+- Полное отсутствие заглушек: работают только реальные подключенные ПК.
 """
 
 import os
 import sys
 import time
 import json
+import socket
 import sqlite3
 import base64
 import asyncio
 import threading
+import subprocess
 from io import BytesIO
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
@@ -22,12 +30,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 try:
-    from PIL import Image, ImageDraw, ImageFont, ImageGrab
+    from PIL import Image, ImageGrab
 except ImportError:
-    Image, ImageDraw, ImageFont, ImageGrab = None, None, None, None
+    Image, ImageGrab = None, None
 
 
-app = FastAPI(title="IT-Class Guardian Server", version="1.1.0")
+app = FastAPI(title="IT-Class Guardian Server", version="2.0.0")
 
 BASE_DIR = Path(os.environ.get("IT_CLASS_BUNDLE_DIR", Path(__file__).resolve().parent))
 STATIC_DIR = BASE_DIR / "static"
@@ -36,6 +44,18 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def get_lan_ip() -> str:
+    """Определяет реальный IP-адрес компьютера учителя в локальной сети."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 class TeacherScreenBroadcaster:
@@ -75,29 +95,29 @@ class TeacherScreenBroadcaster:
 broadcaster = TeacherScreenBroadcaster()
 
 
-def generate_mock_thumbnail(title: str, text: str, is_warning: bool = False) -> str:
-    """Генерирует аккуратную превью-картинку экрана для демо-станций."""
-    if not Image:
-        return ""
-    img = Image.new("RGB", (320, 180), color=(18, 18, 24) if not is_warning else (35, 12, 18))
-    draw = ImageDraw.Draw(img)
+def udp_beacon_loop():
+    """Широковещательный маяк (UDP broadcast на 8025): агенты на ПК учеников находят учителя автоматически."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    except Exception:
+        pass
+    while True:
+        try:
+            lan_ip = get_lan_ip()
+            payload = json.dumps({
+                "beacon": "IT_CLASS_TEACHER_HUB",
+                "server_url": f"http://{lan_ip}:8023",
+                "teacher_ip": lan_ip,
+                "port": 8023
+            }).encode("utf-8")
+            sock.sendto(payload, ("255.255.255.255", 8025))
+        except Exception:
+            pass
+        time.sleep(3.0)
 
-    bar_color = (30, 30, 40) if not is_warning else (70, 20, 30)
-    draw.rectangle([0, 0, 320, 22], fill=bar_color)
-    draw.text((8, 4), title[:40], fill=(220, 220, 230))
 
-    line_color = (50, 50, 65) if not is_warning else (90, 35, 45)
-    for y in range(35, 160, 14):
-        w = 120 + ((y * 37) % 160)
-        draw.rectangle([14, y, 14 + w, y + 6], fill=line_color)
-
-    if is_warning:
-        draw.rectangle([210, 8, 312, 20], fill=(225, 29, 72))
-        draw.text((214, 8), "НАРУШЕНИЕ!", fill=(255, 255, 255))
-
-    buf = BytesIO()
-    img.save(buf, format="JPEG", quality=65)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+threading.Thread(target=udp_beacon_loop, daemon=True).start()
 
 
 def init_db():
@@ -122,19 +142,6 @@ def init_db():
         latest_thumbnail TEXT
     )
     """)
-
-    cur.execute("PRAGMA table_info(stations)")
-    cols = [col[1] for col in cur.fetchall()]
-    if "latest_thumbnail" not in cols:
-        cur.execute("ALTER TABLE stations ADD COLUMN latest_thumbnail TEXT")
-
-    # Ensure all existing stations have thumbnails populated
-    cur.execute("SELECT station_id, active_window, username FROM stations WHERE latest_thumbnail IS NULL OR latest_thumbnail = ''")
-    missing_thumbs = cur.fetchall()
-    for s_id, win, user in missing_thumbs:
-        is_warn = any(w in (win or "").lower() for w in ["roblox", "steam", "minecraft", "torrent", "discord", "игры"])
-        t = generate_mock_thumbnail(win or "Рабочий стол", user or "user", is_warning=is_warn)
-        cur.execute("UPDATE stations SET latest_thumbnail = ? WHERE station_id = ?", (t, s_id))
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS commands (
@@ -169,34 +176,9 @@ def init_db():
     )
     """)
 
-    cur.execute("SELECT COUNT(*) FROM stations")
-    if cur.fetchone()[0] == 0:
-        demo_stations = [
-            ("STATION-01", "ПК-01 (Иванов А.)", "alex_i", "192.168.1.101", "Visual Studio Code - main.py", 14.5, 38.2, 512.0, 340.5, 33.5, 0, 1, False),
-            ("STATION-02", "ПК-02 (Смирнов Д.)", "dmitry_s", "192.168.1.102", "Roblox Player Beta (Внимание!)", 78.4, 82.0, 512.0, 18.2, 96.4, 0, 0, True),
-            ("STATION-03", "ПК-03 (Кузнецова М.)", "maria_k", "192.168.1.103", "Яндекс Браузер - Реферат по информатике", 22.0, 45.1, 512.0, 410.0, 19.9, 0, 1, False),
-            ("STATION-04", "ПК-04 (Попов М.)", "maksim_p", "192.168.1.104", "Steam - Загрузка обновления", 64.0, 71.3, 512.0, 4.8, 99.1, 0, 0, True),
-            ("STATION-05", "ПК-05 (Васильев К.)", "kirill_v", "192.168.1.105", "Python 3.13 IDLE - turtle_draw.py", 18.2, 34.0, 512.0, 395.0, 22.8, 0, 1, False),
-            ("STATION-06", "ПК-06 (Петрова Е.)", "elena_p", "192.168.1.106", "Блокнот - Конспект урока", 5.0, 28.6, 512.0, 430.0, 16.0, 0, 1, False),
-            ("STATION-07", "ПК-07 (Новиков С.)", "sergey_n", "192.168.1.107", "Torrent Клиент (Забивает канал)", 85.0, 89.4, 512.0, 12.0, 97.6, 0, 0, True),
-            ("STATION-08", "ПК-08 (Федоров И.)", "igor_f", "192.168.1.108", "PyCharm Community 2026", 31.0, 58.0, 512.0, 290.0, 43.3, 0, 1, False),
-            ("STATION-09", "ПК-09 (Морозов В.)", "vlad_m", "192.168.1.109", "Discord - Голосовой канал", 28.0, 62.0, 512.0, 320.0, 37.5, 0, 0, True),
-            ("STATION-10", "ПК-10 (Волкова А.)", "anna_v", "192.168.1.110", "Paint - Схема алгоритма", 8.0, 30.5, 512.0, 415.0, 18.9, 0, 1, False),
-            ("STATION-11", "ПК-11 (Алексеев Д.)", "danil_a", "192.168.1.111", "Telegram Desktop", 19.0, 48.0, 512.0, 370.0, 27.7, 0, 0, True),
-            ("STATION-12", "ПК-12 (Лебедев Н.)", "nikita_l", "192.168.1.112", "Командная строка cmd.exe", 12.0, 32.0, 512.0, 385.0, 24.8, 0, 1, False),
-        ]
-        now = time.time()
-        for s_id, s_name, user, ip, win, cpu, ram, total, free, used, locked, snap, is_warn in demo_stations:
-            thumb = generate_mock_thumbnail(win, user, is_warning=is_warn)
-            cur.execute("""
-            INSERT INTO stations (station_id, station_name, username, ip_address, active_window, cpu_percent, ram_percent, disk_total_gb, disk_free_gb, disk_used_percent, is_locked, has_snapshot, last_seen, latest_thumbnail)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (s_id, s_name, user, ip, win, cpu, ram, total, free, used, locked, snap, now, thumb))
-
-        cur.execute("""
-        INSERT INTO audit_logs (event_type, station_id, station_name, details, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """, ("SYS_INIT", "SERVER", "Сервер Учителя", "Инициализация журнала аудита и реестра компьютеров класса.", now))
+    # Полное удаление любых устаревших демо-заглушек
+    cur.execute("DELETE FROM stations WHERE station_id LIKE 'STATION-%'")
+    cur.execute("DELETE FROM audit_logs WHERE details LIKE '%демо%' OR details LIKE '%Инициализация%'")
 
     conn.commit()
     conn.close()
@@ -237,6 +219,12 @@ class FramePushPayload(BaseModel):
     frame_b64: str
 
 
+class StationConnectRequest(BaseModel):
+    ip: str
+    port: int = 8024
+    station_name: Optional[str] = None
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -261,6 +249,7 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+test_agent_proc = None
 
 
 @app.get("/")
@@ -271,8 +260,206 @@ def get_dashboard():
     return HTMLResponse("<h1>IT-Class Guardian Server is Running</h1>")
 
 
+@app.get("/api/network/info")
+def get_network_info():
+    """Возвращает сетевые координаты сервера учителя для отображения в интерфейсе."""
+    lan_ip = get_lan_ip()
+    return {
+        "teacher_ip": lan_ip,
+        "port": 8023,
+        "server_url": f"http://{lan_ip}:8023"
+    }
+
+
+@app.post("/api/stations/connect")
+def connect_student_station(req: StationConnectRequest):
+    """
+    Учитель вручную подключает компьютер ученика по IP-адресу.
+    Сервер учителя отправляет запрос на ПК ученика (порт 8024), привязывает его и запрашивает телеметрию.
+    """
+    ip = req.ip.strip()
+    port = req.port or 8024
+    lan_ip = get_lan_ip()
+    teacher_server_url = f"http://{lan_ip}:8023"
+
+    import urllib.request
+    try:
+        # 1. Привязка агента к серверу учителя
+        pair_req = urllib.request.Request(
+            f"http://{ip}:{port}/pair",
+            data=json.dumps({"server_url": teacher_server_url}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(pair_req, timeout=3.0) as resp:
+            pair_resp = json.loads(resp.read().decode("utf-8"))
+
+        # 2. Получение первичной телеметрии и снимка экрана
+        status_req = urllib.request.Request(f"http://{ip}:{port}/status")
+        with urllib.request.urlopen(status_req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        station_id = data.get("station_id", f"PC_{ip.replace('.', '_')}")
+        station_name = req.station_name or data.get("station_name", f"ПК-{ip}")
+        now = time.time()
+
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO stations (station_id, station_name, username, ip_address, active_window, cpu_percent, ram_percent, disk_total_gb, disk_free_gb, disk_used_percent, is_locked, has_snapshot, last_seen, latest_thumbnail)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(station_id) DO UPDATE SET
+            station_name = excluded.station_name,
+            username = excluded.username,
+            ip_address = excluded.ip_address,
+            active_window = excluded.active_window,
+            cpu_percent = excluded.cpu_percent,
+            ram_percent = excluded.ram_percent,
+            disk_total_gb = excluded.disk_total_gb,
+            disk_free_gb = excluded.disk_free_gb,
+            disk_used_percent = excluded.disk_used_percent,
+            is_locked = excluded.is_locked,
+            has_snapshot = excluded.has_snapshot,
+            last_seen = excluded.last_seen,
+            latest_thumbnail = COALESCE(excluded.latest_thumbnail, stations.latest_thumbnail)
+        """, (
+            station_id, station_name, data.get("username", "user"), ip,
+            data.get("active_window", "Рабочий стол"),
+            data.get("cpu_percent", 0.0), data.get("ram_percent", 0.0),
+            data.get("disk_total_gb", 512.0), data.get("disk_free_gb", 100.0),
+            data.get("disk_used_percent", 20.0),
+            1 if data.get("is_locked") else 0,
+            1 if data.get("has_snapshot") else 0,
+            now,
+            data.get("thumbnail_b64")
+        ))
+
+        cur.execute("""
+        INSERT INTO audit_logs (event_type, station_id, station_name, details, created_at)
+        VALUES ('CONNECT', ?, ?, ?, ?)
+        """, (station_id, station_name, f"Учитель успешно подключил станцию ученика {station_name} ({ip}:{port})", now))
+
+        conn.commit()
+        conn.close()
+
+        return {"success": True, "station_id": station_id, "station_name": station_name, "ip": ip}
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Не удалось подключиться к {ip}:{port} ({e}). Убедитесь, что на ПК ученика запущен Агент_Ученика.exe и оба ПК находятся в одной сети."
+        }
+
+
+@app.post("/api/network/scan")
+def scan_network_for_students():
+    """
+    Быстрое многопоточное сканирование подсети класса на наличие запущенных агентов учеников (порт 8024).
+    """
+    lan_ip = get_lan_ip()
+    ip_parts = lan_ip.split(".")
+    candidates = []
+    if len(ip_parts) == 4 and lan_ip != "127.0.0.1":
+        prefix = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}."
+        candidates = [f"{prefix}{i}" for i in range(1, 255)]
+    candidates.append("127.0.0.1")
+
+    def probe(ip):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.18)
+        try:
+            code = s.connect_ex((ip, 8024))
+            s.close()
+            if code == 0:
+                return ip
+        except Exception:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=75) as ex:
+        active_ips = list(filter(None, ex.map(probe, candidates)))
+
+    found_list = []
+    teacher_server_url = f"http://{lan_ip}:8023"
+    import urllib.request
+    for ip in active_ips:
+        try:
+            pair_req = urllib.request.Request(
+                f"http://{ip}:8024/pair",
+                data=json.dumps({"server_url": teacher_server_url}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(pair_req, timeout=1.5)
+
+            status_req = urllib.request.Request(f"http://{ip}:8024/status")
+            with urllib.request.urlopen(status_req, timeout=1.5) as r:
+                st = json.loads(r.read().decode("utf-8"))
+                st["ip"] = ip
+                found_list.append(st)
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "scanned_ips": len(candidates),
+        "found_count": len(found_list),
+        "found": found_list
+    }
+
+
+@app.delete("/api/stations/{station_id}")
+def delete_station(station_id: str):
+    """Удаляет рабочее место из списка (например, если ПК отключен или перенесен)."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM stations WHERE station_id = ?", (station_id,))
+    cur.execute("""
+    INSERT INTO audit_logs (event_type, station_id, station_name, details, created_at)
+    VALUES ('DISCONNECT', ?, ?, 'Рабочее место удалено учителем', ?)
+    """, (station_id, station_id, time.time()))
+    conn.commit()
+    conn.close()
+    return {"success": True, "station_id": station_id}
+
+
+@app.post("/api/test_agent/start")
+def start_test_agent():
+    """Запускает локальный скрытый агент ученика в фоне (без окна) для мгновенной проверки."""
+    global test_agent_proc
+    agent_script = BASE_DIR / "student_agent.py"
+    py_exe = sys.executable
+    if sys.platform == "win32":
+        pyw_candidate = Path(py_exe).parent / "pythonw.exe"
+        if pyw_candidate.exists():
+            py_exe = str(pyw_candidate)
+
+    creation_flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+    test_agent_proc = subprocess.Popen(
+        [py_exe, str(agent_script)],
+        cwd=str(BASE_DIR),
+        creationflags=creation_flags
+    )
+    time.sleep(1.0)
+    return {"success": True, "message": "Скрытый агент ученика успешно запущен в фоне (без окна)"}
+
+
+@app.post("/api/test_agent/stop")
+def stop_test_agent():
+    """Останавливает локальный тестовый агент ученика."""
+    global test_agent_proc
+    if test_agent_proc:
+        try:
+            test_agent_proc.terminate()
+        except Exception:
+            pass
+        test_agent_proc = None
+    if sys.platform == "win32":
+        subprocess.run('wmic process where "commandline like \'%student_agent.py%\'" call terminate', shell=True, capture_output=True)
+        subprocess.run('taskkill /f /im Агент_Ученика.exe >nul 2>&1', shell=True, capture_output=True)
+    return {"success": True, "message": "Агент ученика остановлен"}
+
+
 @app.post("/api/agent/heartbeat")
 def handle_heartbeat(data: HeartbeatPayload):
+    """Принимает регулярный сигнал и живой скриншот экрана от агента ученика."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     now = time.time()
@@ -301,6 +488,7 @@ def handle_heartbeat(data: HeartbeatPayload):
         data.thumbnail_b64
     ))
 
+    # Извлечение ожидающих команд для этого ПК
     cur.execute("""
     SELECT id, action, payload FROM commands
     WHERE (station_id = ? OR station_id = 'ALL') AND status = 'PENDING'
@@ -367,7 +555,13 @@ def get_stations():
         item["game_detected"] = any(w in item["active_window"].lower() for w in ["roblox", "steam", "minecraft", "torrent", "discord", "игры"])
         stations_list.append(item)
 
-    return {"stations": stations_list, "total": len(stations_list), "timestamp": now, "broadcast_active": broadcaster.is_broadcasting}
+    return {
+        "stations": stations_list,
+        "total": len(stations_list),
+        "timestamp": now,
+        "broadcast_active": broadcaster.is_broadcasting,
+        "teacher_ip": get_lan_ip()
+    }
 
 
 @app.post("/api/broadcast")
@@ -385,7 +579,7 @@ def broadcast_command(req: CommandRequest):
     cur.execute("""
     INSERT INTO audit_logs (event_type, station_id, station_name, details, created_at)
     VALUES ('BROADCAST', 'ALL', 'Весь класс', ?, ?)
-    """, (f"Массовая команда: {req.action}", now))
+    """, (f"Массовая операция: {req.action}", now))
 
     conn.commit()
     conn.close()
@@ -394,7 +588,6 @@ def broadcast_command(req: CommandRequest):
 
 @app.post("/api/broadcast/start_screen")
 def start_teacher_broadcast():
-    """Запускает трансляцию экрана учителя на все ПК учеников."""
     broadcaster.start()
     broadcast_command(CommandRequest(action="START_BROADCAST"))
     return {"success": True, "broadcasting": True}
@@ -402,7 +595,6 @@ def start_teacher_broadcast():
 
 @app.post("/api/broadcast/stop_screen")
 def stop_teacher_broadcast():
-    """Останавливает трансляцию экрана учителя."""
     broadcaster.stop()
     broadcast_command(CommandRequest(action="STOP_BROADCAST"))
     return {"success": True, "broadcasting": False}
@@ -410,13 +602,11 @@ def stop_teacher_broadcast():
 
 @app.get("/api/broadcast/frame")
 def get_broadcast_frame():
-    """Возвращает текущий кадр экрана учителя для агентов учеников."""
     return {"broadcasting": broadcaster.is_broadcasting, "frame": broadcaster.latest_frame_b64}
 
 
 @app.post("/api/broadcast/push_frame")
 def push_broadcast_frame(data: FramePushPayload):
-    """Принимает кадр захвата экрана из веб-интерфейса браузера учителя."""
     broadcaster.push_frame(data.frame_b64)
     return {"status": "ok"}
 
@@ -440,7 +630,7 @@ def send_station_command(station_id: str, req: CommandRequest):
 
     cur.execute("""
     INSERT INTO audit_logs (event_type, station_id, station_name, details, created_at)
-    VALUES ('TARGET_CMD', ?, ?, ?, ?)
+    VALUES ('COMMAND', ?, ?, ?, ?)
     """, (station_id, station_id, f"Команда: {req.action}", now))
 
     conn.commit()
@@ -494,11 +684,11 @@ async def deploy_assignment(title: str = Form(...), file: UploadFile = File(...)
     cur.execute("""
     INSERT INTO audit_logs (event_type, station_id, station_name, details, created_at)
     VALUES ('ASSIGNMENT', 'ALL', 'Весь класс', ?, ?)
-    """, (f"Раздача задания «{title}» (файл: {file.filename}, размер: {len(content)} байт)", now))
+    """, (f"Раздача задания: {title} ({file.filename})", now))
 
     conn.commit()
     conn.close()
-    return {"success": True, "filename": file.filename, "size_bytes": len(content)}
+    return {"success": True, "filename": file.filename}
 
 
 @app.websocket("/ws/classroom")
@@ -523,15 +713,11 @@ async def websocket_classroom(websocket: WebSocket):
                 "type": "STATIONS_UPDATE",
                 "stations": rows,
                 "timestamp": now,
-                "broadcast_active": broadcaster.is_broadcasting
+                "broadcast_active": broadcaster.is_broadcasting,
+                "teacher_ip": get_lan_ip()
             })
             await asyncio.sleep(2.0)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception:
-        manager.disconnect(websocket)
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8023, reload=False)
+        pass

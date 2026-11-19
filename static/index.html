@@ -3,30 +3,38 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>IT-Class Guardian // Панель Учителя</title>
+  <title>IT-Class Guardian // Пульт Управления Кабинетом Информатики</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
-<body>
-  <div class="app-layout">
-    <!-- Top Navbar -->
+<body class="bg-matte-dark">
+  <div class="app-container">
+    <!-- Top Bar: Navigation, Status & Real-time Metrics -->
     <header class="top-nav">
-      <div class="nav-brand">
-        <span class="brand-shield">🛡️</span>
-        <div class="brand-text">
-          <div class="brand-title">IT-CLASS GUARDIAN // СИСТЕМА УПРАВЛЕНИЯ И ЗАЩИТЫ КЛАССА</div>
+      <div class="nav-left">
+        <div class="brand-badge">
+          <span class="brand-icon">🛡️</span>
+          <span class="brand-name">IT-CLASS GUARDIAN</span>
+          <span class="brand-version font-mono">v2.0</span>
+        </div>
+        <div class="brand-meta">
+          <div class="brand-title">ПУЛЬТ ПРЕПОДАВАТЕЛЯ // СИСТЕМА УПРАВЛЕНИЯ КЛАССОМ</div>
           <div class="brand-sub">Контроль аппаратных ресурсов, защита от переполнения диска и откат к эталону</div>
         </div>
       </div>
       <div class="nav-metrics">
         <div class="metric-pill">
-          <span class="m-label">СТАТУС:</span>
+          <span class="m-label">СТАТУС СЕРВЕРА:</span>
           <span class="m-val val-green" id="serverStatusBadge">🟢 В СЕТИ [8023]</span>
         </div>
         <div class="metric-pill">
-          <span class="m-label">ПОДКЛЮЧЕНО ПК:</span>
+          <span class="m-label">IP УЧИТЕЛЯ (LAN):</span>
+          <span class="m-val font-mono val-blue" id="teacherIpBadge">Определение...</span>
+        </div>
+        <div class="metric-pill">
+          <span class="m-label">АКТИВНО ПК:</span>
           <span class="m-val font-mono" id="metricOnlineCount">0 / 0</span>
         </div>
         <div class="metric-pill">
@@ -46,8 +54,22 @@
 
     <!-- Global Broadcast Command Ribbon -->
     <section class="command-ribbon">
-      <div class="ribbon-label">ОПЕРАЦИИ НА ВЕСЬ КЛАСС:</div>
+      <div class="ribbon-label">УПРАВЛЕНИЕ КЛАССОМ:</div>
       <div class="ribbon-buttons">
+        <!-- Connect & Scan Tools -->
+        <button class="btn btn-connect" id="btnOpenConnectModal" title="Подключить ПК ученика вручную по IP-адресу">
+          ➕ ПОДКЛЮЧИТЬ ПК ПО IP
+        </button>
+        <button class="btn btn-accent" id="btnOpenScanModal" title="Сканировать локальную сеть и автоматически найти все ПК учеников">
+          🔍 СКАНИРОВАТЬ СЕТЬ (LAN)
+        </button>
+        <button class="btn btn-secondary" id="btnToggleTestAgent" title="Запустить скрытый агент на этом ПК для проверки работы">
+          ▶ ТЕСТОВЫЙ АГЕНТ (127.0.0.1)
+        </button>
+
+        <span style="width:1px; height:24px; background:#26262C; margin:0 4px;"></span>
+
+        <!-- Live Broadcast & Classroom Controls -->
         <button class="btn btn-crimson-broadcast" id="btnStartTeacherBroadcast" title="Начать полноэкранную трансляцию экрана учителя на все мониторы учеников">
           🔴 НАЧАТЬ ТРАНСЛЯЦИЮ ЭКРАНА УЧИТЕЛЯ
         </button>
@@ -87,7 +109,7 @@
       <div class="grid-toolbar">
         <div class="toolbar-left">
           <span class="section-title">КАРТА РАБОЧИХ МЕСТ УЧЕНИКОВ</span>
-          <span class="section-count" id="stationsGridHeader">Загрузка данных...</span>
+          <span class="section-count" id="stationsGridHeader">Загрузка...</span>
         </div>
         <div class="toolbar-right">
           <input type="text" id="stationSearchInput" class="search-input font-mono" placeholder="Поиск по номеру ПК, ученику или окну...">
@@ -100,40 +122,96 @@
         <!-- Rendered dynamically via app.js -->
       </div>
 
-      <!-- Audit Logs Panel -->
-      <section class="logs-section">
-        <div class="logs-header">
-          <span class="section-title">ЖУРНАЛ СИСТЕМНОГО АУДИТА И БЕЗОПАСНОСТИ</span>
-          <span class="logs-subtitle">Фиксация команд отката, снимков, блокировок и отчетов агентов</span>
+      <!-- System Log & Audit Trail Panel -->
+      <section class="audit-panel">
+        <div class="audit-header">
+          <span class="audit-title">ЖУРНАЛ СОБЫТИЙ И АУДИТА БЕЗОПАСНОСТИ</span>
+          <span class="audit-badge font-mono">SQLITE REAL-TIME AUDIT LOG</span>
         </div>
-        <div class="logs-table-wrap">
-          <table class="logs-table font-mono">
+        <div class="audit-table-wrap">
+          <table class="audit-table font-mono">
             <thead>
               <tr>
-                <th style="width: 160px;">ВРЕМЯ</th>
-                <th style="width: 140px;">ТИП СОБЫТИЯ</th>
-                <th style="width: 180px;">РАБОЧЕЕ МЕСТО</th>
-                <th>ДЕТАЛИ / РЕЗУЛЬТАТ ОПЕРАЦИИ</th>
+                <th style="width: 140px;">ВРЕМЯ</th>
+                <th style="width: 150px;">ТИП СОБЫТИЯ</th>
+                <th style="width: 180px;">РАБОЧАЯ СТАНЦИЯ</th>
+                <th>ДЕТАЛИ И ОПИСАНИЕ</th>
               </tr>
             </thead>
             <tbody id="logsTableBody">
-              <!-- Rendered via JS -->
+              <!-- Rendered via app.js -->
             </tbody>
           </table>
         </div>
       </section>
     </main>
 
-    <!-- Modal: View Live Screenshot -->
-    <div class="modal-overlay" id="screenshotModal">
+    <!-- Modal: Connect Student PC by IP -->
+    <div class="modal-overlay" id="connectModal">
       <div class="modal-card">
         <div class="modal-header">
-          <span class="modal-title" id="screenshotModalTitle">ЭКРАН УЧЕНИКА В РЕАЛЬНОМ ВРЕМЕНИ</span>
+          <span class="modal-title">ПОДКЛЮЧЕНИЕ КОМПЬЮТЕРА УЧЕНИКА</span>
+          <button class="btn-close" id="btnCloseConnectModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <form id="connectForm" class="deploy-form">
+            <div class="form-group">
+              <label>IP-адрес компьютера ученика в кабинете:</label>
+              <input type="text" id="connectIp" required class="cyber-input font-mono" placeholder="192.168.1.105 или 127.0.0.1">
+              <div class="file-hint">ПК ученика должен находиться в одной локальной сети с учителем.</div>
+            </div>
+            <div class="form-group">
+              <label>Порт агента (по умолчанию 8024):</label>
+              <input type="number" id="connectPort" value="8024" required class="cyber-input font-mono">
+            </div>
+            <div class="form-group">
+              <label>Название рабочего места (опционально):</label>
+              <input type="text" id="connectName" class="cyber-input font-mono" placeholder="ПК-01 (Парта 1, левый ряд)">
+            </div>
+            <div id="connectStatusOutput" style="font-family:var(--font-mono); font-size:12px; margin-top:6px; display:none;"></div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" id="btnSubmitConnect">🚀 ПОДКЛЮЧИТЬ К ПАНЕЛИ</button>
+              <button type="button" class="btn btn-secondary" id="btnCancelConnect">Отмена</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Scan Classroom LAN -->
+    <div class="modal-overlay" id="scanModal">
+      <div class="modal-card" style="max-width: 600px;">
+        <div class="modal-header">
+          <span class="modal-title">СКАНИРОВАНИЕ СЕТИ КАБИНЕТА (AUTO-DISCOVERY)</span>
+          <button class="btn-close" id="btnCloseScanModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size:13px; color:#9CA3AF; margin-bottom:12px;">
+            Сервер учителя выполнит многопоточный опрос подсети класса и найдет все запущенные «Агенты Ученика» (порт 8024), автоматически привязав их к вашему пульту.
+          </p>
+          <button class="btn btn-primary" id="btnExecuteScan" style="width:100%; justify-content:center; padding:12px;">
+            🔍 НАЧАТЬ СКАНИРОВАНИЕ ПОДСЕТИ
+          </button>
+          <div id="scanProgressArea" style="margin-top:14px; display:none;">
+            <div style="font-size:12px; color:#38BDF8; font-family:var(--font-mono); margin-bottom:6px;">
+              ⏳ Сканирование адресов подсети...
+            </div>
+            <div class="scan-results-box" id="scanResultsList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Live Screenshot View -->
+    <div class="modal-overlay" id="screenshotModal">
+      <div class="modal-card modal-large">
+        <div class="modal-header">
+          <span class="modal-title" id="screenshotModalTitle">ПРОСМОТР ЭКРАНА УЧЕНИКА</span>
           <button class="btn-close" id="btnCloseScreenshotModal">&times;</button>
         </div>
         <div class="modal-body">
-          <div class="screenshot-wrap" id="screenshotContainer">
-            <div class="loading-spinner">Запрос кадра у агента...</div>
+          <div class="screenshot-display" id="screenshotContainer">
+            <div class="loading-spinner">Запрос экрана...</div>
           </div>
         </div>
         <div class="modal-footer">
