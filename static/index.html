@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IT-Class Guardian // Панель Учителя</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Top Navbar -->
+    <header class="top-nav">
+      <div class="nav-brand">
+        <span class="brand-shield">🛡️</span>
+        <div class="brand-text">
+          <div class="brand-title">IT-CLASS GUARDIAN // СИСТЕМА УПРАВЛЕНИЯ И ЗАЩИТЫ КЛАССА</div>
+          <div class="brand-sub">Контроль аппаратных ресурсов, защита от переполнения диска и откат к эталону</div>
+        </div>
+      </div>
+      <div class="nav-metrics">
+        <div class="metric-pill">
+          <span class="m-label">СТАТУС:</span>
+          <span class="m-val val-green" id="serverStatusBadge">🟢 В СЕТИ [8023]</span>
+        </div>
+        <div class="metric-pill">
+          <span class="m-label">ПОДКЛЮЧЕНО ПК:</span>
+          <span class="m-val font-mono" id="metricOnlineCount">0 / 0</span>
+        </div>
+        <div class="metric-pill">
+          <span class="m-label">ДИСКОВЫЕ УГРОЗЫ:</span>
+          <span class="m-val font-mono val-amber" id="metricDiskAlerts">0</span>
+        </div>
+        <div class="metric-pill">
+          <span class="m-label">ИГРЫ / НАРУШЕНИЯ:</span>
+          <span class="m-val font-mono val-crimson" id="metricGameAlerts">0</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Global Broadcast Command Ribbon -->
+    <section class="command-ribbon">
+      <div class="ribbon-label">ОПЕРАЦИИ НА ВЕСЬ КЛАСС:</div>
+      <div class="ribbon-buttons">
+        <button class="btn btn-primary" id="btnBroadcastRollback" title="Очистить все компьютеры учеников и вернуть в эталонное чистое состояние">
+          🔄 СБРОС КЛАССА К ЭТАЛОНУ (ПОСЛЕ УРОКА)
+        </button>
+        <button class="btn btn-secondary" id="btnBroadcastSnapshot" title="Зафиксировать текущее чистое состояние всех компьютеров как эталон">
+          📸 СОЗДАТЬ ЭТАЛОННЫЙ СНИМОК
+        </button>
+        <button class="btn btn-warning" id="btnBroadcastLock" title="Вывести на все экраны блокирующий баннер 'Внимание на доску!'">
+          🔒 БЛОКИРОВКА ЭКРАНОВ
+        </button>
+        <button class="btn btn-secondary" id="btnBroadcastUnlock" title="Снять блокировку со всех компьютеров">
+          🔓 СНЯТЬ БЛОКИРОВКУ
+        </button>
+        <button class="btn btn-secondary" id="btnBroadcastPurge" title="Удалить временные файлы, кэши браузеров и дампы со всех дисков C:">
+          🧹 ЭКСТРЕННАЯ ОЧИСТКА ДИСКОВ
+        </button>
+        <button class="btn btn-accent" id="btnOpenAssignmentModal" title="Отправить учебный файл или тест на Рабочие столы всех учеников">
+          📁 РАЗДАТЬ ЗАДАНИЕ
+        </button>
+        <button class="btn btn-danger" id="btnBroadcastReboot" title="Перезагрузить все компьютеры в кабинете">
+          ⚡ ПЕРЕЗАГРУЗИТЬ ВСЕ ПК
+        </button>
+      </div>
+    </section>
+
+    <!-- Main Workspace Area -->
+    <main class="main-content">
+      <!-- Filter and Classroom Grid Header -->
+      <div class="grid-toolbar">
+        <div class="toolbar-left">
+          <span class="section-title">КАРТА РАБОЧИХ МЕСТ УЧЕНИКОВ</span>
+          <span class="section-count" id="stationsGridHeader">Загрузка данных...</span>
+        </div>
+        <div class="toolbar-right">
+          <input type="text" id="stationSearchInput" class="search-input font-mono" placeholder="Поиск по номеру ПК, ученику или окну...">
+          <button class="btn btn-small" id="btnRefreshGrid">Обновить</button>
+        </div>
+      </div>
+
+      <!-- Stations Grid Container -->
+      <div class="stations-grid" id="stationsGrid">
+        <!-- Rendered dynamically via app.js -->
+      </div>
+
+      <!-- Audit Logs Panel -->
+      <section class="logs-section">
+        <div class="logs-header">
+          <span class="section-title">ЖУРНАЛ СИСТЕМНОГО АУДИТА И БЕЗОПАСНОСТИ</span>
+          <span class="logs-subtitle">Фиксация команд отката, снимков, блокировок и отчетов агентов</span>
+        </div>
+        <div class="logs-table-wrap">
+          <table class="logs-table font-mono">
+            <thead>
+              <tr>
+                <th style="width: 160px;">ВРЕМЯ</th>
+                <th style="width: 140px;">ТИП СОБЫТИЯ</th>
+                <th style="width: 180px;">РАБОЧЕЕ МЕСТО</th>
+                <th>ДЕТАЛИ / РЕЗУЛЬТАТ ОПЕРАЦИИ</th>
+              </tr>
+            </thead>
+            <tbody id="logsTableBody">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- Modal: View Live Screenshot -->
+    <div class="modal-overlay" id="screenshotModal">
+      <div class="modal-card">
+        <div class="modal-header">
+          <span class="modal-title" id="screenshotModalTitle">ЭКРАН УЧЕНИКА В РЕАЛЬНОМ ВРЕМЕНИ</span>
+          <button class="btn-close" id="btnCloseScreenshotModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="screenshot-wrap" id="screenshotContainer">
+            <div class="loading-spinner">Запрос кадра у агента...</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary btn-small" id="btnRefreshScreenshot">Обновить снимок</button>
+          <button class="btn btn-secondary btn-small" id="btnCloseScreenshotModalBtn">Закрыть</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Deploy Assignment File -->
+    <div class="modal-overlay" id="assignmentModal">
+      <div class="modal-card">
+        <div class="modal-header">
+          <span class="modal-title">РАЗДАЧА УЧЕБНОГО МАТЕРИАЛА / ЗАДАНИЯ</span>
+          <button class="btn-close" id="btnCloseAssignmentModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <form id="assignmentForm" class="deploy-form">
+            <div class="form-group">
+              <label>Название практической работы / задания:</label>
+              <input type="text" id="assignTitle" required class="cyber-input font-mono" placeholder="Лабораторная работа №4 - Циклы Python">
+            </div>
+            <div class="form-group">
+              <label>Выберите файл для отправки на столы учеников:</label>
+              <input type="file" id="assignFile" required class="cyber-file-input font-mono">
+              <div class="file-hint">Файл будет автоматически сохранен на Рабочий стол каждого ученика в папку «Задания_Учителя».</div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" id="btnSubmitAssignment">🚀 ОТПРАВИТЬ ВСЕМУ КЛАССУ</button>
+              <button type="button" class="btn btn-secondary" id="btnCancelAssignment">Отмена</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast-hub" id="toastHub"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
