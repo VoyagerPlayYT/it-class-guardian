@@ -22,6 +22,10 @@ const btnBroadcastUnlock = document.getElementById('btnBroadcastUnlock');
 const btnBroadcastPurge = document.getElementById('btnBroadcastPurge');
 const btnBroadcastReboot = document.getElementById('btnBroadcastReboot');
 const btnOpenAssignmentModal = document.getElementById('btnOpenAssignmentModal');
+const btnStartTeacherBroadcast = document.getElementById('btnStartTeacherBroadcast');
+const btnStopTeacherBroadcast = document.getElementById('btnStopTeacherBroadcast');
+const btnToggleViewMode = document.getElementById('btnToggleViewMode');
+const metricBroadcastStatus = document.getElementById('metricBroadcastStatus');
 
 // Modals
 const screenshotModal = document.getElementById('screenshotModal');
@@ -75,6 +79,7 @@ function connectWebSocket() {
         stationsData = msg.stations;
         renderStations();
         updateTopMetrics();
+        updateBroadcastState(msg.broadcast_active);
       }
     } catch (err) {
       console.error('WS parse error:', err);
@@ -189,6 +194,13 @@ function renderStations() {
           <div class="st-user font-mono">${escapeHtml(s.username || 'user')} • ${escapeHtml(s.ip_address || '127.0.0.1')}</div>
         </div>
         <span class="st-status-badge ${badgeClass}">${badgeText}</span>
+      </div>
+
+      <!-- Veyon-style Live Screen Miniature -->
+      <div class="station-thumbnail-box" onclick="openScreenshotModal('${s.station_id}', '${escapeHtml(s.station_name)}')" title="Кликните для просмотра полноразмерного экрана в реальном времени">
+        ${s.latest_thumbnail ? `<img src="data:image/jpeg;base64,${s.latest_thumbnail}" class="thumbnail-img" alt="Экран">` : `<div style="color:#60606A; font-size:11px;">(Ожидание кадра)</div>`}
+        <span class="thumbnail-overlay-live">● LIVE ЭКРАН</span>
+        ${s.game_detected ? `<span class="thumbnail-overlay-warn">⚠️ ИГРА</span>` : ''}
       </div>
 
       <div class="active-window-box">
@@ -384,6 +396,114 @@ assignmentForm.addEventListener('submit', async (e) => {
     submitBtn.textContent = '🚀 ОТПРАВИТЬ ВСЕМУ КЛАССУ';
   }
 });
+
+// Broadcast & View Mode Controls
+function updateBroadcastState(isActive) {
+  if (isActive) {
+    if (btnStartTeacherBroadcast) btnStartTeacherBroadcast.style.display = 'none';
+    if (btnStopTeacherBroadcast) btnStopTeacherBroadcast.style.display = 'inline-flex';
+    if (metricBroadcastStatus) {
+      metricBroadcastStatus.textContent = '🔴 АКТИВНА [ВЕСЬ КЛАСС]';
+      metricBroadcastStatus.className = 'm-val val-crimson';
+    }
+  } else {
+    if (btnStartTeacherBroadcast) btnStartTeacherBroadcast.style.display = 'inline-flex';
+    if (btnStopTeacherBroadcast) btnStopTeacherBroadcast.style.display = 'none';
+    if (metricBroadcastStatus) {
+      metricBroadcastStatus.textContent = '⏹ ВЫКЛ';
+      metricBroadcastStatus.className = 'm-val';
+    }
+  }
+}
+
+let screenCaptureStream = null;
+let screenCaptureInterval = null;
+
+async function startTeacherBroadcast() {
+  try {
+    const res = await fetch('/api/broadcast/start_screen', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      updateBroadcastState(true);
+      showToast('Трансляция экрана учителя запущена на все ПК!', 'success');
+
+      if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+        try {
+          screenCaptureStream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' }, audio: false });
+          const video = document.createElement('video');
+          video.srcObject = screenCaptureStream;
+          video.play();
+
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+
+          screenCaptureInterval = setInterval(() => {
+            if (!screenCaptureStream || !screenCaptureStream.active) {
+              stopTeacherBroadcast();
+              return;
+            }
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              canvas.width = Math.min(1280, video.videoWidth);
+              canvas.height = Math.round((canvas.width / video.videoWidth) * video.videoHeight);
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+              const b64 = dataUrl.split(',')[1];
+              fetch('/api/broadcast/push_frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ frame_b64: b64 })
+              }).catch(() => {});
+            }
+          }, 250);
+
+          screenCaptureStream.getVideoTracks()[0].onended = () => {
+            stopTeacherBroadcast();
+          };
+        } catch (streamErr) {
+          console.log('Browser capture skipped or declined, using server-side capture loop:', streamErr);
+        }
+      }
+    }
+  } catch (err) {
+    showToast(`Ошибка запуска трансляции: ${err.message}`, 'error');
+  }
+}
+
+async function stopTeacherBroadcast() {
+  if (screenCaptureInterval) {
+    clearInterval(screenCaptureInterval);
+    screenCaptureInterval = null;
+  }
+  if (screenCaptureStream) {
+    screenCaptureStream.getTracks().forEach(t => t.stop());
+    screenCaptureStream = null;
+  }
+  try {
+    const res = await fetch('/api/broadcast/stop_screen', { method: 'POST' });
+    const data = await res.json();
+    updateBroadcastState(false);
+    showToast('Трансляция экрана остановлена', 'warn');
+  } catch (err) {
+    showToast(`Ошибка остановки: ${err.message}`, 'error');
+  }
+}
+
+if (btnStartTeacherBroadcast) {
+  btnStartTeacherBroadcast.addEventListener('click', startTeacherBroadcast);
+}
+
+if (btnStopTeacherBroadcast) {
+  btnStopTeacherBroadcast.addEventListener('click', stopTeacherBroadcast);
+}
+
+if (btnToggleViewMode) {
+  btnToggleViewMode.addEventListener('click', () => {
+    stationsGrid.classList.toggle('veyon-matrix');
+    const isVeyon = stationsGrid.classList.contains('veyon-matrix');
+    btnToggleViewMode.textContent = isVeyon ? '🔲 СТАНДАРТНЫЙ ВИД' : '📺 РЕЖИМ VEYON (ЭКРАНЫ)';
+    showToast(isVeyon ? 'Включен режим монитор-стены Veyon' : 'Включен стандартный режим карточек', 'success');
+  });
+}
 
 // Search filter listener
 stationSearchInput.addEventListener('input', renderStations);

@@ -164,6 +164,85 @@ class LockScreenWindow:
             pass
 
 
+class TeacherBroadcastWindow:
+    """Полноэкранное окно трансляции экрана учителя на мониторы учеников в реальном времени."""
+    def __init__(self, server_url):
+        self.server_url = server_url
+        self.is_broadcasting = False
+        self.root = None
+        self.lbl_image = None
+        self.thread = None
+
+    def start(self):
+        if self.is_broadcasting:
+            return
+        self.is_broadcasting = True
+        self.thread = threading.Thread(target=self._run_ui, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.is_broadcasting = False
+        if self.root:
+            try:
+                self.root.after(0, self.root.destroy)
+            except Exception:
+                pass
+            self.root = None
+
+    def _run_ui(self):
+        import tkinter as tk
+        from PIL import Image, ImageTk
+
+        self.root = tk.Tk()
+        self.root.title("IT-Class Guardian // Трансляция Экрана Учителя")
+        self.root.attributes("-fullscreen", True)
+        self.root.attributes("-topmost", True)
+        self.root.configure(bg="#0B0F19")
+        self.root.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        header = tk.Frame(self.root, bg="#111827", padx=16, pady=8)
+        header.pack(fill="x")
+
+        tk.Label(
+            header,
+            text="🔴 ДЕМОНСТРАЦИЯ ЭКРАНА УЧИТЕЛЯ  •  [ВНИМАНИЕ НА МАТЕРИАЛ]  •  Управление заблокировано",
+            font=("Segoe UI", 12, "bold"),
+            fg="#F43F5E",
+            bg="#111827"
+        ).pack(side="left")
+
+        self.lbl_image = tk.Label(self.root, bg="#0B0F19")
+        self.lbl_image.pack(fill="both", expand=True)
+
+        def poll_frame():
+            if not self.is_broadcasting or not self.root:
+                return
+            try:
+                req = urllib.request.Request(f"{self.server_url}/api/broadcast/frame")
+                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    img_b64 = data.get("frame")
+                    if img_b64:
+                        raw = base64.b64decode(img_b64)
+                        im = Image.open(BytesIO(raw))
+                        sw = self.root.winfo_screenwidth()
+                        sh = self.root.winfo_screenheight() - 40
+                        im.thumbnail((sw, sh))
+                        photo = ImageTk.PhotoImage(im)
+                        self.lbl_image.configure(image=photo)
+                        self.lbl_image.image = photo
+            except Exception:
+                pass
+            if self.is_broadcasting and self.root:
+                self.root.after(200, poll_frame)
+
+        self.root.after(100, poll_frame)
+        try:
+            self.root.mainloop()
+        except Exception:
+            pass
+
+
 class StudentGuardianAgent:
     def __init__(self):
         self.config = load_config()
@@ -171,6 +250,7 @@ class StudentGuardianAgent:
         self.station_id = self.config.get("station_id", socket.gethostname())
         self.station_name = self.config.get("station_name", "ПК-Ученика")
         self.locker = LockScreenWindow()
+        self.broadcaster_viewer = TeacherBroadcastWindow(self.server_url)
         self.running = True
 
         # Ensure persistence
@@ -215,6 +295,7 @@ class StudentGuardianAgent:
                 pass
 
         has_snapshot = (SNAPSHOT_DIR.exists() and (SNAPSHOT_DIR / "manifest.json").exists())
+        thumbnail_b64 = self.capture_thumbnail()
 
         return {
             "station_id": self.station_id,
@@ -229,8 +310,22 @@ class StudentGuardianAgent:
             "disk_used_percent": disk_used_percent,
             "is_locked": self.locker.is_locked,
             "has_snapshot": has_snapshot,
-            "agent_version": "1.0.0"
+            "agent_version": "1.0.0",
+            "thumbnail_b64": thumbnail_b64
         }
+
+    def capture_thumbnail(self):
+        """Создает миниатюру текущего экрана ученика для отображения на матрице Veyon."""
+        if not ImageGrab:
+            return None
+        try:
+            im = ImageGrab.grab()
+            im.thumbnail((320, 180))
+            buf = BytesIO()
+            im.save(buf, format="JPEG", quality=45)
+            return base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            return None
 
     def create_snapshot(self):
         """Создает эталонный снимок чистого состояния ПК: файлы рабочего стола, документы, обои."""
@@ -423,7 +518,13 @@ class StudentGuardianAgent:
         payload = cmd.get("payload", {})
         print(f"[AGENT] Executing command: {action}")
 
-        if action == "ROLLBACK":
+        if action == "START_BROADCAST":
+            self.broadcaster_viewer.start()
+            return {"success": True, "status": "broadcast_started"}
+        elif action == "STOP_BROADCAST":
+            self.broadcaster_viewer.stop()
+            return {"success": True, "status": "broadcast_stopped"}
+        elif action == "ROLLBACK":
             return self.execute_rollback()
         elif action == "SNAPSHOT":
             return self.create_snapshot()

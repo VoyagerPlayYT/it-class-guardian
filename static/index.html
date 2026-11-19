@@ -37,6 +37,10 @@
           <span class="m-label">ИГРЫ / НАРУШЕНИЯ:</span>
           <span class="m-val font-mono val-crimson" id="metricGameAlerts">0</span>
         </div>
+        <div class="metric-pill">
+          <span class="m-label">ТРАНСЛЯЦИЯ ЭКРАНА:</span>
+          <span class="m-val font-mono" id="metricBroadcastStatus">⏹ ВЫКЛ</span>
+        </div>
       </div>
     </header>
 
@@ -44,6 +48,12 @@
     <section class="command-ribbon">
       <div class="ribbon-label">ОПЕРАЦИИ НА ВЕСЬ КЛАСС:</div>
       <div class="ribbon-buttons">
+        <button class="btn btn-crimson-broadcast" id="btnStartTeacherBroadcast" title="Начать полноэкранную трансляцию экрана учителя на все мониторы учеников">
+          🔴 НАЧАТЬ ТРАНСЛЯЦИЮ ЭКРАНА УЧИТЕЛЯ
+        </button>
+        <button class="btn btn-secondary" id="btnStopTeacherBroadcast" style="display:none;" title="Остановить трансляцию экрана">
+          ⏹ ОСТАНОВИТЬ ТРАНСЛЯЦИЮ
+        </button>
         <button class="btn btn-primary" id="btnBroadcastRollback" title="Очистить все компьютеры учеников и вернуть в эталонное чистое состояние">
           🔄 СБРОС КЛАССА К ЭТАЛОНУ (ПОСЛЕ УРОКА)
         </button>
@@ -64,6 +74,9 @@
         </button>
         <button class="btn btn-danger" id="btnBroadcastReboot" title="Перезагрузить все компьютеры в кабинете">
           ⚡ ПЕРЕЗАГРУЗИТЬ ВСЕ ПК
+        </button>
+        <button class="btn btn-secondary" id="btnToggleViewMode" title="Переключить размер карточек (Компактный / Матрица Veyon с большими экранами)">
+          📺 РЕЖИМ VEYON (ЭКРАНЫ)
         </button>
       </div>
     </section>
